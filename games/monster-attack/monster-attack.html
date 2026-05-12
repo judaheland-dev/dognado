@@ -80,8 +80,8 @@ body{background:#0a0a18;overflow:hidden;font-family:'Segoe UI',sans-serif;color:
 #restartBtn:hover{transform:scale(1.07);}
 .floaty{position:fixed;pointer-events:none;font-weight:800;font-size:.95rem;z-index:50;text-shadow:0 2px 5px rgba(0,0,0,.8);animation:floatUp .85s ease-out forwards;}
 @keyframes floatUp{0%{opacity:1;transform:translateY(0);}100%{opacity:0;transform:translateY(-55px);}}
-.xMarker{position:fixed;pointer-events:none;z-index:20;font-size:2.2rem;font-weight:900;color:#ff0000;text-shadow:0 0 12px #ff0000,0 0 24px #ff000066;transform:translate(-50%,-50%);animation:xBlink .35s ease-in-out infinite alternate;}
-@keyframes xBlink{0%{opacity:1;transform:translate(-50%,-50%) scale(1.1);}100%{opacity:0.15;transform:translate(-50%,-50%) scale(0.82);}}
+.xMarker{position:fixed;pointer-events:none;z-index:20;font-size:2.4rem;font-weight:900;color:#ff1100;text-shadow:0 0 10px #ff2200,0 0 22px #ff0000,0 0 40px #ff000066;transform:translate(-50%,-50%);animation:xPulse 0.9s ease-in-out infinite alternate;}
+@keyframes xPulse{0%{filter:brightness(1) drop-shadow(0 0 8px #ff2200);transform:translate(-50%,-50%) scale(1.0);}100%{filter:brightness(1.6) drop-shadow(0 0 22px #ff4400);transform:translate(-50%,-50%) scale(1.12);}}
 #canineScreen{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:flex-start;background:radial-gradient(ellipse at center,#0a001a 0%,#0a0a18 100%);z-index:150;overflow:hidden;padding:16px 0 0;}
 #canineScreen h2{font-size:clamp(1.4rem,3.5vw,2.1rem);font-weight:900;color:#ffcc44;text-shadow:0 0 18px #ffcc4488;margin-bottom:4px;flex-shrink:0;}
 #canineScreen>p{color:#aaa;margin-bottom:10px;font-size:.9rem;flex-shrink:0;}
@@ -369,6 +369,13 @@ function defaultUpgrades(){
     bipodBonus:0, chainGunBonus:0, chainGunTimer:0,
     slugBonus:0, turboTriggerBonus:0, turboTriggerTimer:0,
     gatlingOn:false, gatlingTimer:0, burstBonus:0, buffUpBonus:0,
+    // new upgrade props
+    reloadSpeedBonus:0, phoenixCharge:0, deathAuraBonus:0, deathAuraTimer:0,
+    spiralShot:0,
+    killStreakBonus:0, killStreakTimer:0, momentumKills:0,
+    solarFlareMult:0,
+    crystalVacuumAuto:false, crystalVacuumPulse:false, crystalVacuumCooldown:0,
+    crystalCostReduction:0, crystalCostCap:false,
   };
 }
 let p1U = defaultUpgrades();
@@ -376,8 +383,19 @@ let p2U = defaultUpgrades();
 let _aU = p1U;
 function _aHeal(n){ if(_aU===p2U){playerHP2=Math.min(getMaxHP(p2U),playerHP2+n);}else{playerHP=Math.min(getMaxHP(),playerHP+n);} }
 function _timeSlowMult(){ return Math.max(0.3,1-(p1U.timeSlowBonus+p2U.timeSlowBonus)*0.2); }
-// Crystals needed per level: level 1 = 15, level 2 = 30, level 3 = 45, etc.
-function crystalsForLevel(lv){ return lv * 15; }
+// Crystals needed per level: level 1≈2, smooth exponential curve.
+// Amounts ≥100 are divided by 4; amounts >500 are also divided by 3.
+// Optional 2nd arg: player unit — each crystalCostReduction stack cuts cost by 20%, min 1.
+function crystalsForLevel(lv, u){
+  const v = Math.round(5/3 * Math.pow(100, (lv - 1) / 19));
+  let base;
+  if(v > 500) base = Math.round(v / 4 / 3);
+  else base = v >= 100 ? Math.round(v / 4) : v;
+  if(u && u.crystalCostReduction > 0)
+    base = Math.max(1, Math.round(base * Math.pow(0.8, u.crystalCostReduction)));
+  if(u && u.crystalCostCap) base = Math.min(base, 500);
+  return base;
+}
 
 // Stats
 function getMaxHP(u)   { u=u||p1U; return 80+(hpLevel-1)*20+u.hpBonusExtra*20; }
@@ -1131,8 +1149,8 @@ function makeMonsterMesh(type){
       foot.scale.set(0.9,0.55,1.5); foot.position.set(x,-0.35,-0.06); g.add(foot);
     });
 
-  }else if(type==='demon'){
-    // Winged bat-demon with curved horns, membrane wings, cloven hooves, glowing runes
+  }else if(type==='graggle'){
+    // Winged bat-graggle with curved horns, membrane wings, cloven hooves, glowing runes
     // Torso — muscular, V-shaped
     const torso=new THREE.Mesh(new THREE.SphereGeometry(0.52,12,10),em(0xaa0010,0x550000,0.3));
     torso.scale.set(1,1.6,0.88); torso.position.set(0,0.96,0); torso.castShadow=true; g.add(torso);
@@ -1144,7 +1162,7 @@ function makeMonsterMesh(type){
     // Neck
     const neck=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.28,0.26,9),bm(0x880010));
     neck.position.set(0,1.68,0.02); g.add(neck);
-    // Head — angular and demonic
+    // Head — angular and graggle-like
     const head=new THREE.Mesh(new THREE.SphereGeometry(0.42,12,10),em(0xbb0018,0x660000,0.22));
     head.scale.set(1,1.12,1.05); head.position.set(0,2.1,0.04); g.add(head);
     // Angry brow ridge
@@ -1517,127 +1535,205 @@ function makeMonsterMesh(type){
 
 // ── Monster defs ──────────────────────────────────────────────
 const MDEFS={
-  goblin:  {hp:8,    spd:0.088,dmg:6,   coin:2,   crystals:1, scale:1.0},
-  ogre:    {hp:20,   spd:0.032,dmg:15,  coin:7,   crystals:2, scale:1.0},
-  skeleton:{hp:12,   spd:0.082,dmg:10,  coin:5,   crystals:1, scale:1.0},
-  demon:   {hp:25,   spd:0.072,dmg:20,  coin:10,  crystals:2, scale:1.0},
-  giant:   {hp:50,   spd:0.022,dmg:32,  coin:40,  crystals:5, scale:1.35},
-  healer:  {hp:15,   spd:0.048,dmg:5,   coin:15,  crystals:3, scale:1.0, isHealer:true},
-  boss:    {hp:800,  spd:0.018,dmg:500, coin:300, crystals:25,scale:2.5, isBoss:true},
+  goblin:  {hp:3,    spd:0.068,dmg:2,   coin:2,   crystals:1, scale:1.0},
+  ogre:    {hp:8,    spd:0.025,dmg:6,   coin:7,   crystals:2, scale:1.0},
+  skeleton:{hp:5,    spd:0.063,dmg:4,   coin:5,   crystals:3, scale:1.0},
+  graggle: {hp:10,   spd:0.055,dmg:8,   coin:10,  crystals:5, scale:1.0},
+  giant:   {hp:20,   spd:0.017,dmg:13,  coin:40,  crystals:7, scale:1.35},
+  healer:  {hp:6,    spd:0.037,dmg:2,   coin:15,  crystals:3, scale:1.0, isHealer:true},
+  boss:    {hp:320,  spd:0.014,dmg:200, coin:300, crystals:25,scale:2.5, isBoss:true},
 };
 
 // ── Pre-build monster templates (prevents spawn-time freeze) ──
 const MONSTER_TEMPLATES={};
-['goblin','ogre','skeleton','demon','giant','healer','boss'].forEach(t=>{
+['goblin','ogre','skeleton','graggle','giant','healer','boss'].forEach(t=>{
   MONSTER_TEMPLATES[t]=makeMonsterMesh(t);
 });
 
 // ── Wave defs ─────────────────────────────────────────────────
-const WAVE_DEFS=[
-  [{type:'goblin',count:4}],
-  [{type:'goblin',count:4},{type:'skeleton',count:2}],
-  [{type:'skeleton',count:4},{type:'ogre',count:1}],
-  [{type:'goblin',count:3},{type:'ogre',count:2},{type:'skeleton',count:3}],
-  [{type:'demon',count:2},{type:'ogre',count:2}],
-  [{type:'demon',count:3},{type:'skeleton',count:4}],
-  [{type:'goblin',count:6},{type:'demon',count:2},{type:'ogre',count:2}],
-  [{type:'demon',count:4},{type:'ogre',count:3}],
-  [{type:'demon',count:5},{type:'skeleton',count:5}],
-  [{type:'giant',count:1},{type:'demon',count:3}],
-];
+// Monster unlock tiers: goblin=wave1, skeleton=wave5, graggle=wave10, giant=wave15
+// spawnIntervalFor(w) returns [startInterval, endInterval] in seconds for a given wave:
+//   wave 1  → 1.25s → 1.0s  (moderate trickle, 2x faster than before)
+//   wave 10 → 0.73s → 0.55s
+//   wave 20 → 0.3s → 0.1s   (constant stream)
+function spawnIntervalsFor(w){
+  const t=Math.min(1,(w-1)/19);
+  return [1.25-t*0.95, 1.0-t*0.9];
+}
+function currentWaveSpawnDelay(){
+  const [si,ei]=spawnIntervalsFor(wave);
+  const waveLen=Math.max(1,waveTimeLimitFor(wave));
+  const progress=Math.max(0,Math.min(1,1-waveTimeLeft/waveLen));
+  const base=si+(ei-si)*progress;
+  return Math.max(0.08, base*(0.9+Math.random()*0.25));
+}
+// One monster per tick
+function groupSizeFor(w){
+  return 1;
+}
+function buildWaveQueue(w, buffMult){
+  const queue=[];
+  // Wave 20: boss + continuous minion stream
+  if(w===20){
+    queue.push('boss');
+    for(let i=0;i<290;i++) queue.push(Math.random()<0.3?'giant':Math.random()<0.5?'graggle':'skeleton');
+    return queue;
+  }
+  const [si,ei]=spawnIntervalsFor(w);
+  const avgInt=(si+ei)/2;
+  const avgGroup=groupSizeFor(w);
+  const baseCount=Math.round(60/avgInt*avgGroup);
+  const count=Math.round(baseCount*(buffMult||1));
+  for(let i=0;i<count;i++){
+    const r=Math.random();
+    let type;
+    if(w>=15 && r<0.18)       type='giant';
+    else if(w>=10 && r<0.40)  type='graggle';
+    else if(w>=5  && r<0.45)  type='skeleton';
+    else if(w>=3  && r<0.30)  type='ogre';
+    else                       type='goblin';
+    queue.push(type);
+  }
+  return queue;
+}
+
+function randomMonsterTypeForWave(w){
+  if(w===20){
+    const r20=Math.random();
+    return r20<0.3?'giant':r20<0.8?'graggle':'skeleton';
+  }
+  const r=Math.random();
+  if(w>=15 && r<0.18)       return 'giant';
+  if(w>=10 && r<0.40)       return 'graggle';
+  if(w>=5  && r<0.45)       return 'skeleton';
+  if(w>=3  && r<0.30)       return 'ogre';
+  return 'goblin';
+}
 
 // ── 24 Power-up definitions ───────────────────────────────────
 const ALL_POWERUPS=[
-  {id:'hp_up', rarity:'common',       icon:'❤️',  name:'HP Surge',         desc:'+20 Max HP & full heal both dogs',  apply:()=>{_aU.hpBonusExtra++;playerHP=getMaxHP(_aU);if(!player2dead)playerHP2=getMaxHP(_aU);}},
-  {id:'dmg_up', rarity:'uncommon',      icon:'🔥',  name:'Power Shot',        desc:'+10 damage per bullet',            apply:()=>{_aU.dmgBonusExtra++;}},
-  {id:'speed_up', rarity:'uncommon',    icon:'💨',  name:'Swift Paws',        desc:'Both dogs move 25% faster',       apply:()=>{_aU.speedBonus++;}},
-  {id:'rapid', rarity:'uncommon',       icon:'⚡',  name:'Rapid Fire',        desc:'Fire rate 15% faster',            apply:()=>{_aU.rapidFireBonus++;}},
-  {id:'bigmag', rarity:'uncommon',      icon:'📦',  name:'Big Magazine',      desc:'+4 ammo capacity',                apply:()=>{_aU.bigMagBonus++;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
+  {id:'hp_up', rarity:'uncommon',     icon:'❤️',  name:'HP Surge',         desc:'+20 Max HP & full heal both dogs',  apply:()=>{_aU.hpBonusExtra++;playerHP=getMaxHP(_aU);if(!player2dead)playerHP2=getMaxHP(_aU);}},
+  {id:'dmg_up', rarity:'rare',          icon:'🔥',  name:'Power Shot',        desc:'+10 damage per bullet',            apply:()=>{_aU.dmgBonusExtra++;}},
+  {id:'speed_up', rarity:'rare',        icon:'💨',  name:'Swift Paws',        desc:'Both dogs move 25% faster',       apply:()=>{_aU.speedBonus++;}},
+  {id:'rapid', rarity:'rare',           icon:'⚡',  name:'Rapid Fire',        desc:'Fire rate 15% faster',            apply:()=>{_aU.rapidFireBonus++;}},
+  {id:'bigmag', rarity:'rare',          icon:'📦',  name:'Big Magazine',      desc:'+4 ammo capacity',                apply:()=>{_aU.bigMagBonus++;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
   {id:'lifesteal', rarity:'rare',   icon:'🩸',  name:'Life Steal',        desc:'Heal 3 HP per kill (both dogs)',  apply:()=>{_aU.lifeStealBonus++;}},
-  {id:'def_up', rarity:'uncommon',      icon:'🛡️',  name:'Iron Fur',          desc:'-1 damage taken per hit',         apply:()=>{_aU.defBonusExtra++;}},
-  {id:'insta_reload', rarity:'common',icon:'🔄',  name:'Quick Reload',      desc:'Instantly reload both dogs!',     apply:()=>{reloading=false;reloadTimer=0;ammo=getAmmoMax(_aU);reloading2=false;reloadTimer2=0;ammo2=getAmmoMax(_aU);document.getElementById('reloadBar').style.display='none';document.getElementById('reloadBar2').style.display='none';}},
-  {id:'multishot', rarity:'rare',   icon:'🎯',  name:'Multi Shot',        desc:'Fire 2 bullets at once',          apply:()=>{_aU.multiShotBonus++;}},
+  {id:'def_up', rarity:'rare',          icon:'🛡️',  name:'Iron Fur',          desc:'-1 damage taken per hit',         apply:()=>{_aU.defBonusExtra++;}},
+  {id:'insta_reload', rarity:'common',  icon:'🔄',  name:'Quick Reload',      desc:'Instantly reload both dogs!',     apply:()=>{reloading=false;reloadTimer=0;ammo=getAmmoMax(_aU);reloading2=false;reloadTimer2=0;ammo2=getAmmoMax(_aU);document.getElementById('reloadBar').style.display='none';document.getElementById('reloadBar2').style.display='none';}},
+  {id:'multishot', rarity:'epic',   icon:'🎯',  name:'Multi Shot',        desc:'Fire 2 bullets at once',          apply:()=>{_aU.multiShotBonus++;}},
   {id:'pierce', rarity:'rare',      icon:'🏹',  name:'Piercing Round',    desc:'Bullets pierce up to 3 enemies',  apply:()=>{_aU.pierceBonus++;}},
   {id:'explosive', rarity:'epic',   icon:'💥',  name:'Explosive Rounds',  desc:'Bullets deal AoE splash damage',  apply:()=>{_aU.explosiveBonus++;}},
-  {id:'coinmag', rarity:'uncommon',     icon:'🪙',  name:'Coin Magnet',       desc:'Crystals fly to you faster',      apply:()=>{_aU.coinMagnet++;}},
-  {id:'crystalmag', rarity:'uncommon',  icon:'🔷',  name:'Crystal Magnet',    desc:'Crystals fly to you from far',    apply:()=>{_aU.crystalMagnet++;}},
-  {id:'regen', rarity:'uncommon',       icon:'🌿',  name:'Regeneration',      desc:'Restore 2 HP/3s for both dogs',   apply:()=>{_aU.regenBonus++;}},
+  {id:'coinmag', rarity:'rare',         icon:'🪙',  name:'Coin Magnet',       desc:'Crystals fly to you faster',      apply:()=>{_aU.coinMagnet++;}},
+  {id:'crystalmag', rarity:'rare',      icon:'🔷',  name:'Crystal Magnet',    desc:'Crystals fly to you from far',    apply:()=>{_aU.crystalMagnet++;}},
+  {id:'regen', rarity:'rare',           icon:'🌿',  name:'Regeneration',      desc:'Restore 2 HP/3s for both dogs',   apply:()=>{_aU.regenBonus++;}},
   {id:'shield', rarity:'rare',      icon:'🔵',  name:'Energy Shield',     desc:'+30 shield HP (absorbs hits)',     apply:()=>{_aU.shieldHP+=30;}},
   {id:'frozen', rarity:'rare',      icon:'❄️',  name:'Frost Rounds',      desc:'Bullets slow enemies by 40%',     apply:()=>{_aU.frozenShot++;}},
   {id:'burn', rarity:'rare',        icon:'🔥',  name:'Burn Rounds',       desc:'Bullets ignite enemies (DoT)',     apply:()=>{_aU.burnShot++;}},
   {id:'stun', rarity:'rare',        icon:'😵',  name:'Stun Shot',         desc:'10% chance to stun enemies 1s',   apply:()=>{_aU.stunShot++;}},
-  {id:'doublecoins', rarity:'uncommon', icon:'💰',  name:'Wave Bonus',        desc:'Earn 2x coins at wave end',        apply:()=>{_aU.doubleCoins=true;}},
+  {id:'doublecoins', rarity:'rare',     icon:'💰',  name:'Wave Bonus',        desc:'Earn 2x coins at wave end',        apply:()=>{_aU.doubleCoins=true;}},
   {id:'vampire', rarity:'rare',     icon:'🦇',  name:'Vampire',           desc:'Heal 5 HP when enemy dies nearby', apply:()=>{_aU.vampireBonus++;}},
   {id:'timeslow', rarity:'epic',    icon:'⏳',  name:'Time Slow',         desc:'All monsters move 20% slower',    apply:()=>{_aU.timeSlowBonus++;monsters.forEach(m=>{if(!m.dead)m.spd=m.def.spd*(1-_aU.timeSlowBonus*0.2);});}},
-  {id:'berserker', rarity:'epic',   icon:'😤',  name:'Berserker',         desc:'+15% dmg when HP below 30%',      apply:()=>{_aU.berserkerBonus++;}},
+  {id:'berserker', rarity:'rare',   icon:'😤',  name:'Berserker',         desc:'+15% dmg when HP below 30%',      apply:()=>{_aU.berserkerBonus++;}},
   {id:'crit', rarity:'rare',        icon:'⭐',  name:'Critical Hit',      desc:'20% chance to deal 2.5x damage',  apply:()=>{_aU.critBonus++;}},
   {id:'hpfull', rarity:'common',      icon:'💊',  name:'Full Heal',         desc:'Restore ALL health to both dogs!', apply:()=>{playerHP=getMaxHP(_aU);if(!player2dead)playerHP2=getMaxHP(_aU);updateMainHUD();}},
   // ── 25 new power-ups ──
   {id:'trishot', rarity:'rare',     icon:'🎆',  name:'Triple Shot',       desc:'Fire 3 bullets at once',          apply:()=>{_aU.triShotBonus++;}},
   {id:'ricochet', rarity:'rare',    icon:'🔀',  name:'Ricochet',          desc:'Bullets bounce to a 2nd enemy',   apply:()=>{_aU.ricochetBonus++;}},
   {id:'homing', rarity:'rare',      icon:'🧲',  name:'Homing Rounds',     desc:'Bullets curve toward nearest foe', apply:()=>{_aU.homingBonus++;}},
-  {id:'overdrive', rarity:'common',   icon:'🚀',  name:'Overdrive',         desc:'Bullets travel 60% faster',       apply:()=>{_aU.bulletSpdBonus++;}},
+  {id:'overdrive', rarity:'rare',    icon:'🚀',  name:'Overdrive',         desc:'Bullets travel 60% faster',       apply:()=>{_aU.bulletSpdBonus++;}},
   {id:'shrapnel', rarity:'rare',    icon:'💢',  name:'Shrapnel',          desc:'On kill, spray 4 fragments',       apply:()=>{_aU.shrapnelBonus++;}},
   {id:'poison', rarity:'rare',      icon:'🧪',  name:'Poison Rounds',     desc:'Bullets poison (8 dmg/s for 4s)', apply:()=>{_aU.poisonShot++;}},
-  {id:'ghost', rarity:'uncommon',       icon:'👻',  name:'Ghost Bullets',     desc:'Bullets pass through walls freely',apply:()=>{_aU.ghostBonus++;}},
+  {id:'ghost', rarity:'rare',           icon:'👻',  name:'Ghost Bullets',     desc:'Bullets pass through walls freely',apply:()=>{_aU.ghostBonus++;}},
   {id:'bigbullet', rarity:'rare',   icon:'🔵',  name:'Big Bullet',        desc:'Bullets are 2x larger, +5 dmg',   apply:()=>{_aU.bigBulletBonus++;}},
-  {id:'healwave', rarity:'common',    icon:'💚',  name:'Heal Wave',         desc:'Heal 20 HP both dogs + regen up',  apply:()=>{_aHeal(20);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+20);_aU.regenBonus++;updateMainHUD();}},
-  {id:'empower', rarity:'epic',     icon:'🔮',  name:'Empower',           desc:'Next 5 bullets deal triple dmg',   apply:()=>{_aU.empowerCharges+=5;}},
+  {id:'healwave', rarity:'rare',      icon:'💚',  name:'Heal Wave',         desc:'Heal 20 HP both dogs + regen up',  apply:()=>{_aHeal(20);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+20);_aU.regenBonus++;updateMainHUD();}},
+  {id:'empower', rarity:'uncommon', icon:'🔮',  name:'Empower',           desc:'Next 5 bullets deal triple dmg',   apply:()=>{_aU.empowerCharges+=5;}},
   {id:'bulwark', rarity:'epic',     icon:'🔒',  name:'Bulwark',           desc:'+50 shield & +1 defense',         apply:()=>{_aU.shieldHP+=50;_aU.defBonusExtra++;}},
-  {id:'surge', rarity:'legendary',       icon:'⚡',  name:'Surge',             desc:'Shoot twice as fast for this run', apply:()=>{_aU.rapidFireBonus+=3;}},
-  {id:'tough', rarity:'uncommon',       icon:'🦴',  name:'Tough As Nails',    desc:'+40 Max HP both dogs',             apply:()=>{_aU.hpBonusExtra+=2;playerHP=Math.min(getMaxHP(_aU),playerHP+40);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+40);}},
+  {id:'surge', rarity:'epic',            icon:'⚡',  name:'Surge',             desc:'Shoot twice as fast for this run', apply:()=>{_aU.rapidFireBonus+=3;}},
+  {id:'tough', rarity:'rare',           icon:'🦴',  name:'Tough As Nails',    desc:'+40 Max HP both dogs',             apply:()=>{_aU.hpBonusExtra+=2;playerHP=Math.min(getMaxHP(_aU),playerHP+40);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+40);}},
   {id:'blaze', rarity:'rare',       icon:'🔥',  name:'Blaze',             desc:'Every bullet burns (no stack)',    apply:()=>{_aU.burnShot=Math.max(_aU.burnShot,1);}},
-  {id:'frost_nova', rarity:'legendary',  icon:'🌨️',  name:'Frost Nova',        desc:'All monsters frozen for 3s now!', apply:()=>{monsters.forEach(m=>{if(!m.dead){m.frozen=3.0;m.spd=m.def.spd*0.05;}});}},
-  {id:'backstep', rarity:'uncommon',    icon:'💃',  name:'Evasion',           desc:'Both dogs move 40% faster',        apply:()=>{_aU.speedBonus+=2;}},
+  {id:'frost_nova', rarity:'common',     icon:'🌨️',  name:'Frost Nova',        desc:'All monsters frozen for 3s now!', apply:()=>{monsters.forEach(m=>{if(!m.dead){m.frozen=3.0;m.spd=m.def.spd*0.05;}});}},
+  {id:'backstep', rarity:'rare',        icon:'💃',  name:'Evasion',           desc:'Both dogs move 40% faster',        apply:()=>{_aU.speedBonus+=2;}},
   {id:'canine_bond', rarity:'rare', icon:'🐾',  name:'Canine Bond',       desc:'Both dogs ability cooldown -5s',   apply:()=>{selectedCanine.cooldown=Math.max(5,selectedCanine.cooldown-5);selectedCanine2.cooldown=Math.max(5,selectedCanine2.cooldown-5);}},
   {id:'tank', rarity:'epic',        icon:'🛡️',  name:'Tank Mode',         desc:'+3 defense & +60 max HP both',     apply:()=>{_aU.defBonusExtra+=3;_aU.hpBonusExtra+=3;playerHP=Math.min(getMaxHP(_aU),playerHP+60);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+60);}},
   {id:'leech', rarity:'rare',       icon:'🩺',  name:'Blood Leech',       desc:'Lifesteal +5 HP per kill',        apply:()=>{_aU.lifeStealBonus+=2;}},
-  {id:'wavemaster', rarity:'legendary',  icon:'🌊',  name:'Wave Master',       desc:'+50% wave completion coins',       apply:()=>{_aU.waveBonusMult+=0.5;}},
+  {id:'wavemaster', rarity:'epic',       icon:'🌊',  name:'Wave Master',       desc:'+50% wave completion coins',       apply:()=>{_aU.waveBonusMult+=0.5;}},
   {id:'crystal_rush', rarity:'common',icon:'💎',  name:'Crystal Rush',      desc:'Gain 3 free crystals right now!',  apply:()=>{for(let i=0;i<3;i++){crystalsThisLevel++;const needed=crystalsForLevel(playerLevel);if(crystalsThisLevel>=needed){crystalsThisLevel=0;playerLevel++;updateMainHUD();}}}},
-  {id:'rampage', rarity:'legendary',     icon:'😈',  name:'Rampage',           desc:'+20 dmg & +25% fire rate',        apply:()=>{_aU.dmgBonusExtra+=2;_aU.rapidFireBonus+=2;}},
-  {id:'fortress', rarity:'epic',    icon:'🏰',  name:'Fortress',          desc:'+80 shield HP',                    apply:()=>{_aU.shieldHP+=80;}},
-  {id:'overload', rarity:'legendary',    icon:'🔋',  name:'Overload',          desc:'Both reload instantly + +6 ammo', apply:()=>{_aU.bigMagBonus+=2;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);reloading=false;reloadTimer=0;reloading2=false;reloadTimer2=0;document.getElementById('reloadBar').style.display='none';document.getElementById('reloadBar2').style.display='none';}},
-  {id:'ghost_armor', rarity:'uncommon', icon:'🌀',  name:'Spectral Armor',    desc:'Take 25% less dmg permanently',    apply:()=>{_aU.ghostArmorBonus++;}},
+  {id:'rampage', rarity:'epic',          icon:'😈',  name:'Rampage',           desc:'+20 dmg & +25% fire rate',        apply:()=>{_aU.dmgBonusExtra+=2;_aU.rapidFireBonus+=2;}},
+  {id:'fortress', rarity:'rare',    icon:'🏰',  name:'Fortress',          desc:'+80 shield HP',                    apply:()=>{_aU.shieldHP+=80;}},
+  {id:'overload', rarity:'epic',         icon:'🔋',  name:'Overload',          desc:'Both reload instantly + +6 ammo', apply:()=>{_aU.bigMagBonus+=2;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);reloading=false;reloadTimer=0;reloading2=false;reloadTimer2=0;document.getElementById('reloadBar').style.display='none';document.getElementById('reloadBar2').style.display='none';}},
+  {id:'ammo_vault', rarity:'legendary',  icon:'🗄️',  name:'Ammo Vault',        desc:'+200 ammo capacity — never run dry!', apply:()=>{_aU.bigMagBonus+=50;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
+  {id:'ghost_armor', rarity:'rare',     icon:'🌀',  name:'Spectral Armor',    desc:'Take 25% less dmg permanently',    apply:()=>{_aU.ghostArmorBonus++;}},
   // ── 35 Gun Upgrades ────────────────────────────────────────────────────────────
   // Gun Types — change your fire mode
   {id:'gu_machine', rarity:'legendary',    icon:'🔫', name:'Machine Gun',        desc:'Fire every 0.15s | +40 ammo | fires instantly',           apply:()=>{_aU.autoShootInterval=Math.min(_aU.autoShootInterval,0.15);_aU.bigMagBonus+=10;_aU.rapidFireBonus+=6;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
-  {id:'gu_smg', rarity:'common',        icon:'💨', name:'Submachine Gun',     desc:'Fire every 0.8s | +8 ammo capacity',                      apply:()=>{_aU.autoShootInterval=Math.min(_aU.autoShootInterval,0.8);_aU.bigMagBonus+=2;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
+  {id:'gu_smg', rarity:'rare',          icon:'💨', name:'Submachine Gun',     desc:'Fire every 0.8s | +8 ammo capacity',                      apply:()=>{_aU.autoShootInterval=Math.min(_aU.autoShootInterval,0.8);_aU.bigMagBonus+=2;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
   {id:'gu_minigun', rarity:'legendary',    icon:'⚙️',name:'Minigun',           desc:'Fire every 0.4s | +20 ammo capacity',                     apply:()=>{_aU.autoShootInterval=Math.min(_aU.autoShootInterval,0.4);_aU.bigMagBonus+=5;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
   {id:'gu_sniper', rarity:'legendary',     icon:'🎯', name:'Sniper Rifle',       desc:'4x dmg per bullet | fires every 4s | pierces all',        apply:()=>{_aU.sniperMult=Math.max(_aU.sniperMult,4);_aU.autoShootInterval=Math.max(_aU.autoShootInterval,4.0);_aU.pierceBonus+=99;}},
   {id:'gu_shotgun', rarity:'epic',    icon:'💥', name:'Shotgun',            desc:'+5 spread bullets per shot (75% dmg each)',                apply:()=>{_aU.shotgunBullets+=5;}},
   {id:'gu_buckshot', rarity:'epic',   icon:'🔶', name:'Buckshot',           desc:'+8 wide-spread pellets per shot',                         apply:()=>{_aU.shotgunBullets+=8;}},
   {id:'gu_railgun', rarity:'legendary',    icon:'⚡',     name:'Railgun',            desc:'2x dmg | pierces ALL enemies in a straight line',         apply:()=>{_aU.sniperMult=Math.max(_aU.sniperMult,2);_aU.pierceBonus+=99;}},
   {id:'gu_burst', rarity:'epic',      icon:'💨', name:'Burst Rifle',        desc:'Fire 2 extra rapid burst bullets per shot',               apply:()=>{_aU.burstBonus+=2;}},
-  {id:'gu_gatling', rarity:'rare',    icon:'🌪', name:'Gatling Gun',        desc:'Starts at 1.5s fire rate | speeds up to 0.12s over time', apply:()=>{_aU.gatlingOn=true;_aU.gatlingTimer=0;_aU.autoShootInterval=1.5;}},
-  {id:'gu_suppressor', rarity:'uncommon', icon:'🔇', name:'Suppressor',         desc:'Fire every 1.5s | +1 point-blank bonus stack | +dmg',     apply:()=>{_aU.autoShootInterval=Math.min(_aU.autoShootInterval,1.5);_aU.pointBlankBonus++;_aU.dmgBonusExtra++;}},
+  {id:'gu_gatling', rarity:'epic',    icon:'🌪', name:'Gatling Gun',        desc:'Starts at 1.5s fire rate | speeds up to 0.12s over time', apply:()=>{_aU.gatlingOn=true;_aU.gatlingTimer=0;_aU.autoShootInterval=1.5;}},
+  {id:'gu_suppressor', rarity:'rare',    icon:'🔇', name:'Suppressor',         desc:'Fire every 1.5s | +1 point-blank bonus stack | +dmg',     apply:()=>{_aU.autoShootInterval=Math.min(_aU.autoShootInterval,1.5);_aU.pointBlankBonus++;_aU.dmgBonusExtra++;}},
   // Gun Mods — stacking stat upgrades
-  {id:'gu_hair', rarity:'uncommon',       icon:'⚡',     name:'Hair Trigger',       desc:'+25% fire rate (rapid fire +2 stacks)',                   apply:()=>{_aU.rapidFireBonus+=2;}},
-  {id:'gu_hollow', rarity:'uncommon',     icon:'🟡', name:'Hollow Points',      desc:'+10 flat damage per bullet',                              apply:()=>{_aU.dmgBonusExtra++;}},
-  {id:'gu_drum', rarity:'uncommon',       icon:'📦', name:'Drum Magazine',      desc:'+16 ammo capacity',                                       apply:()=>{_aU.bigMagBonus+=4;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
+  {id:'gu_hair', rarity:'rare',           icon:'⚡',     name:'Hair Trigger',       desc:'+25% fire rate (rapid fire +2 stacks)',                   apply:()=>{_aU.rapidFireBonus+=2;}},
+  {id:'gu_hollow', rarity:'rare',         icon:'🟡', name:'Hollow Points',      desc:'+10 flat damage per bullet',                              apply:()=>{_aU.dmgBonusExtra++;}},
+  {id:'gu_drum', rarity:'rare',           icon:'📦', name:'Drum Magazine',      desc:'+16 ammo capacity',                                       apply:()=>{_aU.bigMagBonus+=4;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
   {id:'gu_scope', rarity:'rare',      icon:'🔭', name:'Scope',              desc:'+50% dmg per stack when enemy is more than 6 units away', apply:()=>{_aU.scopeBonus++;}},
-  {id:'gu_laser', rarity:'uncommon',      icon:'🔴', name:'Laser Sight',        desc:'+2 crit stacks (20% crit chance each)',                   apply:()=>{_aU.critBonus+=2;}},
+  {id:'gu_laser', rarity:'rare',          icon:'🔴', name:'Laser Sight',        desc:'+2 crit stacks (20% crit chance each)',                   apply:()=>{_aU.critBonus+=2;}},
   {id:'gu_dual', rarity:'rare',       icon:'✌️',name:'Dual Wield',        desc:'Always fires a 2nd side-by-side bullet',                  apply:()=>{_aU.multiShotBonus++;}},
   {id:'gu_ap', rarity:'rare',         icon:'🪖', name:'AP Rounds',          desc:'Bullets pierce 6 more enemies | +10 flat dmg',            apply:()=>{_aU.pierceBonus+=2;_aU.dmgBonusExtra++;}},
   {id:'gu_tracer', rarity:'rare',     icon:'🧲', name:'Tracer Rounds',      desc:'Bullets curve toward nearest enemy',                      apply:()=>{_aU.homingBonus++;}},
   {id:'gu_incendiary', rarity:'rare', icon:'🔥', name:'Incendiary Rounds',  desc:'All bullets automatically ignite enemies',                apply:()=>{_aU.burnShot=Math.max(_aU.burnShot,1);}},
   {id:'gu_overcharge', rarity:'epic', icon:'🔋', name:'Overcharged Chamber',desc:'Every 5th bullet deals 5x damage',                       apply:()=>{_aU.overchargeEvery=5;_aU.overchargeCounter=0;}},
   {id:'gu_quad', rarity:'epic',       icon:'💠', name:'Quad Barrel',        desc:'Fire 4 extra angled bullets per shot',                    apply:()=>{_aU.triShotBonus+=2;}},
-  {id:'gu_spray', rarity:'uncommon',      icon:'🔫', name:'Spray & Pray',       desc:'+4 random-direction bullets per shot (50% dmg)',          apply:()=>{_aU.sprayCount+=4;}},
-  {id:'gu_pointblank', rarity:'uncommon', icon:'💥', name:'Point Blank Shot',   desc:'+15 flat dmg per stack when monster is within 3 units',   apply:()=>{_aU.pointBlankBonus++;}},
-  {id:'gu_bipod', rarity:'uncommon',      icon:'🪡', name:'Bipod Stance',       desc:'+30% dmg per stack while standing completely still',      apply:()=>{_aU.bipodBonus++;}},
-  {id:'gu_chain', rarity:'legendary', icon:'🔗', name:'Chain Gun Mode',     desc:'Each kill gives 3 seconds of 0.3s fire interval',         apply:()=>{_aU.chainGunBonus++;}},
+  {id:'gu_spray', rarity:'rare',          icon:'🔫', name:'Spray & Pray',       desc:'+4 random-direction bullets per shot (50% dmg)',          apply:()=>{_aU.sprayCount+=4;}},
+  {id:'gu_pointblank', rarity:'rare',    icon:'💥', name:'Point Blank Shot',   desc:'+15 flat dmg per stack when monster is within 3 units',   apply:()=>{_aU.pointBlankBonus++;}},
+  {id:'gu_bipod', rarity:'rare',          icon:'🪡', name:'Bipod Stance',       desc:'+30% dmg per stack while standing completely still',      apply:()=>{_aU.bipodBonus++;}},
+  {id:'gu_chain', rarity:'epic',      icon:'🔗', name:'Chain Gun Mode',     desc:'Each kill gives 3 seconds of 0.3s fire interval',         apply:()=>{_aU.chainGunBonus++;}},
   {id:'gu_smart', rarity:'epic',      icon:'🧠', name:'Smart Ammo',         desc:'Bullets powerfully home toward nearest enemy (+2)',       apply:()=>{_aU.homingBonus+=2;}},
-  {id:'gu_exptips', rarity:'common',    icon:'💣', name:'Explosive Tips',     desc:'Every bullet explodes on impact (area of effect)',        apply:()=>{_aU.explosiveBonus++;}},
+  {id:'gu_exptips', rarity:'rare',      icon:'💣', name:'Explosive Tips',     desc:'Every bullet explodes on impact (area of effect)',        apply:()=>{_aU.explosiveBonus++;}},
   {id:'gu_teflon', rarity:'rare',     icon:'🔀', name:'Teflon Coat',        desc:'Bullets ricochet to a second nearby enemy',               apply:()=>{_aU.ricochetBonus++;}},
   {id:'gu_highcal', rarity:'rare',    icon:'🔵', name:'High Caliber',       desc:'Bullets 2x larger | +10 flat damage per bullet',         apply:()=>{_aU.bigBulletBonus++;_aU.dmgBonusExtra++;}},
-  {id:'gu_foregrip', rarity:'uncommon',   icon:'🎯', name:'Foregrip',           desc:'Adds a persistent extra angled bullet (triple shot +1)', apply:()=>{_aU.triShotBonus++;}},
+  {id:'gu_foregrip', rarity:'rare',       icon:'🎯', name:'Foregrip',           desc:'Adds a persistent extra angled bullet (triple shot +1)', apply:()=>{_aU.triShotBonus++;}},
   {id:'gu_turbo', rarity:'rare',      icon:'💨', name:'Turbo Trigger',      desc:'Leveling up grants 5 seconds of 0.12s fire rate',        apply:()=>{_aU.turboTriggerBonus++;}},
-  {id:'gu_armor_piercing', rarity:'uncommon',icon:'🪖',name:'Armor Piercing',   desc:'Pierce 3 extra enemies | +10 flat damage',               apply:()=>{_aU.pierceBonus++;_aU.dmgBonusExtra++;}},
+  {id:'gu_armor_piercing', rarity:'rare',  icon:'🪖',name:'Armor Piercing',   desc:'Pierce 3 extra enemies | +10 flat damage',               apply:()=>{_aU.pierceBonus++;_aU.dmgBonusExtra++;}},
   {id:'gu_burning', rarity:'rare',    icon:'🔥', name:'Burning Barrel',     desc:'+1 burn stack | makes every bullet ignite enemies',      apply:()=>{_aU.burnShot++;}},
   {id:'gu_slug', rarity:'legendary',       icon:'🔵', name:'Slug Round',         desc:'Each shot also fires a slow 3x dmg slug that pierces all',apply:()=>{_aU.slugBonus++;}},
-  {id:'gu_empower2', rarity:'epic',   icon:'🔮', name:'Empower Clip',       desc:'Next 8 shots deal triple damage',                        apply:()=>{_aU.empowerCharges+=8;}},
+  {id:'gu_empower2', rarity:'uncommon',icon:'🔮', name:'Empower Clip',       desc:'Next 8 shots deal triple damage',                        apply:()=>{_aU.empowerCharges+=8;}},
   // ── Buff Up ──────────────────────────────────────────────────────────────────
   {id:'buff_up', rarity:'epic',       icon:'💪', name:'Buff Up',            desc:'+50 dmg both dogs — but 70% more monsters spawn!',       apply:()=>{_aU.buffUpBonus++;_aU.dmgBonusExtra+=5;}},
+  // ── 20 additional level-up upgrades ─────────────────────────────────────
+  // Defensive
+  {id:'iron_will',     rarity:'rare',      icon:'⚙️',  name:'Iron Will',          desc:'+2 defense to both dogs permanently',                    apply:()=>{_aU.defBonusExtra+=2;}},
+  {id:'crystal_heart', rarity:'rare',      icon:'💙',  name:'Crystal Heart',      desc:'+20 Max HP & +1 regen stack for both dogs',              apply:()=>{_aU.hpBonusExtra++;_aU.regenBonus++;playerHP=Math.min(getMaxHP(_aU),playerHP+20);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+20);}},
+  {id:'shield_wall',   rarity:'rare',      icon:'🪨',  name:'Shield Wall',        desc:'+100 shield HP for both dogs',                           apply:()=>{_aU.shieldHP+=100;}},
+  {id:'phoenix',       rarity:'legendary', icon:'🔥',  name:'Phoenix',            desc:'Survive death once — revive with 30 HP instead',        apply:()=>{_aU.phoenixCharge++;showFloaty('🔥 Phoenix ready!',p1U===_aU?playerGroup.position.clone():playerGroup2.position.clone(),'#ff8800');}},
+  {id:'battle_hardened',rarity:'rare',     icon:'🐕',  name:'Battle Hardened',    desc:'+2 defense & +30 max HP & heal 30 HP both dogs',         apply:()=>{_aU.defBonusExtra+=2;_aU.hpBonusExtra++;playerHP=Math.min(getMaxHP(_aU),playerHP+30);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2+30);}},
+  // Offensive
+  {id:'glass_cannon',  rarity:'epic',      icon:'🔱',  name:'Glass Cannon',       desc:'-20 Max HP but +40 flat damage per bullet',              apply:()=>{_aU.hpBonusExtra=Math.max(_aU.hpBonusExtra-1,-3);_aU.dmgBonusExtra+=4;playerHP=Math.min(getMaxHP(_aU),playerHP);if(!player2dead)playerHP2=Math.min(getMaxHP(_aU),playerHP2);}},
+  {id:'bullet_hail',   rarity:'epic',      icon:'🌧️',  name:'Bullet Hail',        desc:'+8 shotgun pellets per shot (75% dmg each)',             apply:()=>{_aU.shotgunBullets+=8;}},
+  {id:'rapid_barrage', rarity:'rare',      icon:'🎇',  name:'Rapid Barrage',      desc:'+3 angled tri-shot bullets & +15% fire rate',            apply:()=>{_aU.triShotBonus+=3;_aU.rapidFireBonus++;}},
+  {id:'berserker_king',rarity:'epic',      icon:'😡',  name:'Berserker King',     desc:'+5 berserker stacks — now triggers at up to 60% HP',    apply:()=>{_aU.berserkerBonus+=5;}},
+  {id:'sharpshooter',  rarity:'rare',      icon:'🔭',  name:'Sharpshooter',       desc:'+3 scope stacks (+150% dmg on distant targets)',         apply:()=>{_aU.scopeBonus+=3;}},
+  // Status effects
+  {id:'inferno_rounds',rarity:'epic',      icon:'🌋',  name:'Inferno Rounds',     desc:'+4 burn stacks — monsters burn twice as hot',            apply:()=>{_aU.burnShot+=4;}},
+  {id:'arctic_storm',  rarity:'rare',      icon:'🌨',  name:'Arctic Storm',       desc:'+3 freeze stacks — bullets slow even more',              apply:()=>{_aU.frozenShot+=3;}},
+  {id:'thunder_shot',  rarity:'rare',      icon:'⚡',  name:'Thunder Shot',       desc:'+3 stun stacks (30% stun chance per hit)',               apply:()=>{_aU.stunShot+=3;}},
+  {id:'lucky_charm',   rarity:'rare',      icon:'🍀',  name:'Lucky Charm',        desc:'+3 crit stacks (60% critical hit chance)',               apply:()=>{_aU.critBonus+=3;}},
+  // Movement / utility
+  {id:'sonic_paws',    rarity:'rare',      icon:'🏃',  name:'Sonic Paws',         desc:'Both dogs +50% speed & +2 fire rate stacks',            apply:()=>{_aU.speedBonus+=3;_aU.rapidFireBonus+=2;}},
+  {id:'extended_mags', rarity:'rare',      icon:'🗃️',  name:'Extended Mags',      desc:'+8 ammo cap & reload 20% faster',                        apply:()=>{_aU.bigMagBonus+=2;_aU.reloadSpeedBonus++;ammo=getAmmoMax(_aU);ammo2=getAmmoMax(_aU);}},
+  {id:'blood_pact',    rarity:'epic',      icon:'🩸',  name:'Blood Pact',         desc:'+4 lifesteal stacks — recover 12 HP per kill',           apply:()=>{_aU.lifeStealBonus+=4;}},
+  // Instant + passive
+  {id:'orbital_strike',rarity:'epic',     icon:'☄️',  name:'Orbital Strike',     desc:'INSTANTLY destroy every monster on the screen!',         apply:()=>{const alive=monsters.filter(m=>!m.dead);alive.forEach(m=>killMonster(m,_aU,_aU===p2U));}},
+  {id:'crystal_discount', rarity:'rare',    icon:'🔹', name:'Crystal Discount',   desc:'-20% crystals needed to level up (stacks, min 1)',        apply:()=>{_aU.crystalCostReduction++;updateMainHUD();}},
+  {id:'crystal_cap',      rarity:'legendary', icon:'💎', name:'Crystal Ceiling',    desc:'Crystal cost to level up can never exceed 500!',          apply:()=>{_aU.crystalCostCap=true;updateMainHUD();}},
+  {id:'crystal_hoover', rarity:'epic',     icon:'🌀',  name:'Crystal Hoover',      desc:'Forever: every crystal on screen is instantly collected!', apply:()=>{_aU.crystalVacuumAuto=true;}},
+  {id:'crystal_pulse',  rarity:'rare',     icon:'💠',  name:'Crystal Pulse',       desc:'Every 30s: suck all crystals on screen to you!',          apply:()=>{_aU.crystalVacuumPulse=true; _aU.crystalVacuumCooldown=0;}},
+  {id:'war_cry',       rarity:'rare',      icon:'📣',  name:'War Cry',            desc:'Freeze ALL monsters for 5s now! +2 freeze stacks',       apply:()=>{monsters.forEach(m=>{if(!m.dead){m.frozen=5.0;m.spd=m.def.spd*0.05;}});_aU.frozenShot+=2;}},
+  {id:'death_aura',    rarity:'epic',      icon:'💀',  name:'Death Aura',         desc:'Monsters within 4 units take 8 dmg/s (passive aura)',    apply:()=>{_aU.deathAuraBonus++;}},
+  {id:'galaxy_shot',   rarity:'legendary', icon:'🌀',  name:'Galaxy Shot',        desc:'Every shot also fires a spiral bullet that whirls to the arena edge, piercing ALL enemies', apply:()=>{_aU.spiralShot++;showFloaty('🌀 Galaxy Shot!',p1U===_aU?playerGroup.position.clone():playerGroup2.position.clone(),'#cc44ff');}},
 ];
 
 // ── Scene state ────────────────────────────────────────────────
@@ -1680,7 +1776,17 @@ const monsters=[];
 const crystalPickups=[];
 const CRYSTAL_GEO=new THREE.OctahedronGeometry(0.28,0);
 const CRYSTAL_MAT=new THREE.MeshLambertMaterial({color:0x0055ff,emissive:0x0022ff,emissiveIntensity:2.0});
-const DEATH_CRYSTAL_DROP=8;
+const DEATH_CRYSTAL_DROP=8; // used for player-death drops only
+// ── Crystal drop per monster type scaled by wave ──────────────────────────
+const MONSTER_CRYSTAL_CAPS={goblin:9,skeleton:11,ogre:11,graggle:15,healer:9,giant:21,boss:33};
+const MONSTER_BASE_CRYSTALS={goblin:5,ogre:5,skeleton:7,graggle:9,giant:11,healer:5,boss:13};
+function crystalDropForMonster(type){
+  const cap=MONSTER_CRYSTAL_CAPS[type]??4;
+  const base=MONSTER_BASE_CRYSTALS[type]??2;
+  // Increases by 1 every 2 rounds, capped at the monster's max crystal limit.
+  const amount=base+Math.floor((wave-1)/2);
+  return Math.min(cap,amount);
+}
 // ── Particle pool (pre-allocated — zero alloc / scene-add per frame) ──────
 const PARTICLE_GEO=new THREE.SphereGeometry(0.12,4,4);
 const PARTICLE_POOL_SIZE=120;
@@ -1693,7 +1799,27 @@ const particles=[];
     _pPool.push({mesh:m,vel:new THREE.Vector3(),life:0,inUse:false});
   }
 })();
-const MAX_MONSTERS=30; // cap to prevent lag
+const MAX_MONSTERS=50; // cap per round
+const MONSTER_TIER=['goblin','skeleton','ogre','graggle','giant']; // merge ladder
+
+// ── Monster merge (runs when live count hits MAX_MONSTERS cap) ──────────────
+function mergeMonsters(){
+  const alive=monsters.filter(m=>!m.dead);
+  for(let t=0;t<MONSTER_TIER.length-1;t++){
+    const ofTier=alive.filter(m=>m.type===MONSTER_TIER[t]);
+    if(ofTier.length>=2){
+      const a=ofTier[0],b=ofTier[1];
+      const mx=(a.grp.position.x+b.grp.position.x)/2;
+      const mz=(a.grp.position.z+b.grp.position.z)/2;
+      a.dead=true; scene.remove(a.grp); _disposeMonster(a);
+      b.dead=true; scene.remove(b.grp); _disposeMonster(b);
+      spawnMonster(MONSTER_TIER[t+1],mx,mz);
+      showFloaty('⚡ '+MONSTER_TIER[t+1].toUpperCase()+' (merged)',new THREE.Vector3(mx,1,mz),'#ff8800');
+      return true;
+    }
+  }
+  return false; // nothing left to merge (all giant+)
+}
 
 // ── Bullet / monster GPU resource cleanup helpers ────────────────────────────
 function _disposeBulletMesh(mesh){
@@ -1712,47 +1838,73 @@ function _disposeMonster(m){
 }
 
 // ── Wave timer state ──────────────────────────────────────────
-let waveTimeLeft=30;
+let waveTimeLeft=60;
 let waveTimerActive=false;
 let xMarkerTimer=0;
-const xMarkers=[];
+let decorXTimer=0;
+const xMarkers=[]; // {grp:THREE.Group, mat:THREE.Material, age:0}
+const spawnPositions=[]; // pre-generated {a, x, z, marker} per spawn group
 
-function waveTimeLimitFor(w){ return 30+(w-1)*10; }
+function waveTimeLimitFor(w){ return 60; }
 
 function removeAllXMarkers(){
-  xMarkers.forEach(m=>{if(m.el&&m.el.parentNode)m.el.parentNode.removeChild(m.el);});
+  xMarkers.forEach(m=>{scene.remove(m.grp);m.mat.dispose();});
   xMarkers.length=0;
+  spawnPositions.length=0;
 }
 
-function spawnXMarkers(count){
-  count=count||7;
-  for(let i=0;i<count;i++){
+function removeXMarker(markerGrp){
+  const i=xMarkers.findIndex(m=>m.grp===markerGrp);
+  if(i>=0){scene.remove(xMarkers[i].grp);xMarkers[i].mat.dispose();xMarkers.splice(i,1);}
+}
+
+const DECOR_X_CAP=0; // decorative-only X markers disabled; every visible spawn marker should matter
+const decorXPool=[]; // tracks the decorative (non-spawn) Xs for capping
+function createXMarker3D(x,z,noLight){
+  const mat=new THREE.MeshBasicMaterial({color:0xff2200,transparent:true,opacity:1.0,depthWrite:false});
+  const arm1=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.06,0.28),mat);
+  arm1.rotation.y=Math.PI/4;
+  const arm2=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.06,0.28),mat.clone());
+  arm2.rotation.y=-Math.PI/4;
+  const grp=new THREE.Group();
+  grp.add(arm1); grp.add(arm2);
+  if(!noLight){
+    // Only spawn-warning Xs get the expensive point light
+    const glow=new THREE.PointLight(0xff2200,2.5,6);
+    glow.position.set(0,0.5,0);
+    grp.add(glow);
+  }
+  grp.position.set(x,0.06,z);
+  scene.add(grp);
+  xMarkers.push({grp,mat,age:0,queue:[]});
+  return grp;
+}
+
+function spawnScatteredXMarkers(count, queue){
+  // Each marker holds exactly ONE monster type; spawnDelay fires it near-instantly
+  for(let i=0;i<count&&i<queue.length;i++){
     const a=Math.random()*Math.PI*2;
-    const r=(ARENA_R-5)*Math.random()+2;
-    const wx=Math.cos(a)*r, wz=Math.sin(a)*r;
-    const el=document.createElement('div');
-    el.className='xMarker'; el.textContent='✕';
-    // Project once at spawn time and fix position
-    const v3=new THREE.Vector3(wx,0.5,wz).project(camera);
-    el.style.left=((v3.x*.5+.5)*innerWidth)+'px';
-    el.style.top=((-v3.y*.5+.5)*innerHeight)+'px';
-    document.body.appendChild(el);
-    xMarkers.push({el,wx,wz,age:0,spawnAt:1.5+i*0.2});
+    const r=3+Math.random()*(ARENA_R-5);
+    createXMarker3D(Math.cos(a)*r, Math.sin(a)*r);
+    xMarkers[xMarkers.length-1].queue=[queue[i]];
+    xMarkers[xMarkers.length-1].spawnDelay=0.15+i*0.08; // staggered instant burst
   }
 }
 
+// Place a new X at a random map position with one monster type from pending queue
+function relocateXMarker(type){
+  const a=Math.random()*Math.PI*2;
+  const r=3+Math.random()*(ARENA_R-5);
+  createXMarker3D(Math.cos(a)*r, Math.sin(a)*r);
+  xMarkers[xMarkers.length-1].queue=[type];
+  xMarkers[xMarkers.length-1].spawnDelay=0.2;
+}
+
 function updateXMarkers(dt){
-  for(let i=xMarkers.length-1;i>=0;i--){
-    const m=xMarkers[i]; m.age+=dt;
-    // position is fixed — no re-projection
-    if(m.age>=m.spawnAt){
-      const types=['goblin','skeleton','ogre','demon'];
-      const mt=types[Math.min(Math.floor((wave-1)/3),types.length-1)];
-      let liveCount=0; for(let k=0;k<monsters.length;k++) if(!monsters[k].dead) liveCount++;
-      if(liveCount<MAX_MONSTERS) spawnMonster(wave>=9?'demon':mt,m.wx,m.wz);
-      if(m.el.parentNode) m.el.parentNode.removeChild(m.el);
-      xMarkers.splice(i,1);
-    }
+  const t=performance.now()*0.001;
+  for(let i=0;i<xMarkers.length;i++){
+    xMarkers[i].age+=dt;
+    xMarkers[i].mat.opacity=0.3+0.7*Math.abs(Math.sin(t*3.5+i*0.9));
   }
 }
 
@@ -1839,7 +1991,7 @@ function killMonster(m,killerU,killerIsP2){
       bullets.push({mesh:sm,vx:sdx/sl*(BULLET_SPD*0.8),vz:sdz/sl*(BULLET_SPD*0.8),dist:0,pierced:0,dmgMult:0.5,fromP2:killerIsP2});
     });
   }
-  spawnCrystalPickup(m.grp.position.clone(),DEATH_CRYSTAL_DROP);
+  spawnCrystalPickup(m.grp.position.clone(),crystalDropForMonster(m.type));
   spawnParticles(m.grp.position.clone(),0xff4400,8,0.4);
   scene.remove(m.grp);
   _disposeMonster(m);
@@ -1860,19 +2012,27 @@ function spawnMonster(type,x,z){
     const hbYscale=(type==='boss'?7.2:type==='giant'?4.4:type==='ogre'?2.9:2.3);
   hbm.position.set(0,s*hbYscale,0); grp.add(hbm);
   const spdMult=_timeSlowMult();
-  const scaledHp = def.isBoss ? def.hp : Math.round(def.hp * Math.pow(5, wave - 1));
+  const scaledHp = def.isBoss ? def.hp : Math.round(def.hp * Math.pow(5, (wave - 1) / 8.75));
   monsters.push({grp,type,def,hp:scaledHp,maxHp:scaledHp,spd:def.spd*spdMult,dmgTimer:0,dmgCD:(def.isBoss?2.0:1.1),dead:false,hitFlash:0,wobble:Math.random()*Math.PI*2,hbc,hbt,ctx2,hbm,frozen:0,burning:0,stunned:0,healTimer:0,
     childMeshes:(()=>{const arr=[];grp.traverse(c=>{if(c.isMesh&&c!==hbm)arr.push(c);});return arr;})()});
 }
 
 // ── Wave clear / advance ──────────────────────────────────────
 let waveSpawned=false,waveClearing=false;
+// ── Drip-spawn state ─────────────────────────────────────────
+let spawnQueue=[];
+let spawnTimer=0;
+let spawnTotalForWave=0;
+let spawnedSoFar=0;
+let mergeIdleTimer=0; // pressure-merge: only triggers when queue empty + arena full for 8s
 
 function advanceToNextWave(){
-  if(waveClearing) return;
-  waveClearing=true;
+  if(!waveTimerActive) return;
   waveTimerActive=false;
+  waveClearing=true;
+  decorXPool.length=0;
   removeAllXMarkers();
+  spawnQueue=[]; mergeIdleTimer=0;
   // Coins scale with wave number; Wave Bonus power-up multiplies them
   const baseCoins=5+wave*5;
   const earned=Math.round(baseCoins*((p1U.doubleCoins||p2U.doubleCoins)?2:1)*Math.max(p1U.waveBonusMult,p2U.waveBonusMult));
@@ -1903,9 +2063,6 @@ function startWave(w){
     }
     updateMainHUD();
   }
-  const idx=Math.min(w-1,WAVE_DEFS.length-1);
-  const def=WAVE_DEFS[idx];
-  const extra=w>WAVE_DEFS.length?w-WAVE_DEFS.length:0;
   const banner=document.getElementById('waveBanner');
     if(wave===20){
       banner.textContent='\u26A0\uFE0F NEXT WAVE: 20 \u2014 THE BOSS ARRIVES! \u26A0\uFE0F';
@@ -1913,21 +2070,26 @@ function startWave(w){
       banner.style.color='#ff2200';
       setTimeout(()=>{banner.style.display='none';banner.style.color='';},2000);
     } else {
-      banner.textContent='Next Wave: '+w+'!'; banner.style.display='block';
-      setTimeout(()=>banner.style.display='none',1100);
+      banner.textContent='Wave '+w+'! Get ready!'; banner.style.display='block';
+      setTimeout(()=>banner.style.display='none',1200);
     }
-  def.forEach(e=>{
-    const spawnCount = Math.round((e.count * Math.pow(4, w-1) + extra) * (1 + Math.max(p1U.buffUpBonus,p2U.buffUpBonus)*0.7));
-    for(let i=0;i<spawnCount;i++){
-      const a=Math.random()*Math.PI*2,d=ARENA_R-3;
-      spawnMonster(e.type,Math.cos(a)*d,Math.sin(a)*d);
-    }
-  });
+  // Build drip-spawn queue — starts slow, accelerates as the wave progresses
+  const buffMult = 1 + Math.max(p1U.buffUpBonus, p2U.buffUpBonus) * 0.7;
+  const _fullQueue = buildWaveQueue(w, buffMult);
+  spawnTotalForWave = _fullQueue.length;
+  spawnedSoFar = 0;
   waveSpawned=true; waveClearing=false;
   waveTimeLeft=waveTimeLimitFor(w);
+  spawnTimer = currentWaveSpawnDelay();
   waveTimerActive=true;
   xMarkerTimer=0;
+  decorXTimer=0;
   removeAllXMarkers();
+  // Place a fixed pool of X markers, each holding one pending monster
+  const numMarkers = Math.min(6 + Math.floor(w / 2), 14);
+  spawnScatteredXMarkers(numMarkers, _fullQueue);
+  // Store the remainder of the queue for relocating markers
+  spawnQueue = _fullQueue.slice(numMarkers);
   document.getElementById('waveHUD').textContent='Wave '+w;
   document.getElementById('timerHUD').textContent='\u23F1 '+Math.ceil(waveTimeLeft)+'s';
 }
@@ -1939,7 +2101,7 @@ function updateMainHUD(){
   document.getElementById('hpNum').textContent=Math.max(0,Math.round(playerHP))+'/'+mhp;
   document.getElementById('ammoFill').style.width=(ammo/getAmmoMax()*100)+'%';
   document.getElementById('ammoNum').textContent=ammo+'/'+getAmmoMax();
-  const cn1=crystalsForLevel(p1U.level);
+  const cn1=crystalsForLevel(p1U.level,p1U);
   document.getElementById('crystalFill').style.width=(Math.min(p1U.crystals,cn1)/cn1*100)+'%';
   document.getElementById('crystalNum').textContent=p1U.crystals+'/'+cn1;
   document.getElementById('coinHUD').textContent='\ud83e\ude99 '+coins;
@@ -1950,7 +2112,7 @@ function updateMainHUD(){
   document.getElementById('hpNum2').textContent=Math.max(0,Math.round(playerHP2))+'/'+mhp2;
   document.getElementById('ammoFill2').style.width=(ammo2/getAmmoMax(p2U)*100)+'%';
   document.getElementById('ammoNum2').textContent=ammo2+'/'+getAmmoMax(p2U);
-  const cn2=crystalsForLevel(p2U.level);
+  const cn2=crystalsForLevel(p2U.level,p2U);
   document.getElementById('crystalFill2').style.width=(Math.min(p2U.crystals,cn2)/cn2*100)+'%';
   document.getElementById('crystalNum2').textContent=p2U.crystals+'/'+cn2;
   if(document.getElementById('levelHUD2')){
@@ -1963,7 +2125,7 @@ function updateStartUI(){
   document.getElementById('coinStat').textContent=coins;
   document.getElementById('crystalStat').textContent=p1U.crystals;
   document.getElementById('lvStat').textContent=p1U.level;
-  document.getElementById('crystalProgress').textContent=p1U.crystals+'/'+crystalsForLevel(p1U.level);
+  document.getElementById('crystalProgress').textContent=p1U.crystals+'/'+crystalsForLevel(p1U.level,p1U);
   document.getElementById('hpLvLabel').textContent='(Lv '+hpLevel+') HP +'+(hpLevel*20);
   document.getElementById('dmgLvLabel').textContent='(Lv '+dmgLevel+') Atk +'+(dmgLevel*10);
   document.getElementById('defLvLabel').textContent='(Lv '+defLevel+') Def -'+defLevel+' dmg';
@@ -2045,7 +2207,7 @@ function collectCrystal(c,isP2){
   cu.crystals++;
   spawnParticles(c.mesh.position.clone(),0x0088ff,6,0.35);
   showFloaty('+1 \u{1f537}',c.mesh.position.clone(),'#44aaff');
-  const needed=crystalsForLevel(cu.level);
+  const needed=crystalsForLevel(cu.level,cu);
   if(cu.crystals>=needed){
     cu.crystals=0; cu.level++;
     showFloaty('\u2b50 LEVEL UP! Lv '+cu.level,cPlayer.position.clone(),'#ffff55');
@@ -2133,6 +2295,16 @@ function fireBullet(){
       }, bi*110);
     }
   }
+  // ── Galaxy Shot spiral ──────────────────────────────────────────────────
+  if(p1U.spiralShot>0){
+    const sDir=Math.atan2(dx,dz); // forward direction becomes initial spiral angle
+    for(let si=0;si<p1U.spiralShot;si++){
+      const spiralMesh=new THREE.Mesh(BULLET_GEO,new THREE.MeshBasicMaterial({color:0xcc44ff,transparent:true,opacity:0.95}));
+      const startAng=sDir+(si*Math.PI); // each extra stack fires a second arm offset 180°
+      spiralMesh.position.set(px,0.8,pz); scene.add(spiralMesh);
+      bullets.push({mesh:spiralMesh,spiral:true,spiralOrigX:px,spiralOrigZ:pz,spiralAngle:startAng,spiralRadius:0.4,spiralExpandRate:5.0,spiralRotRate:4.0,vx:0,vz:0,dist:0,pierced:0,dmgMult:shotDmgMult*1.5,flatBonus:0,maxPierce:999,fromP2:false});
+    }
+  }
   spawnParticles(new THREE.Vector3(px,0.8,pz),0xffff44,4,0.15);
   updateMainHUD();
 }
@@ -2168,6 +2340,16 @@ function fireBulletP2(){
         sm.position.set(px2,0.8,pz2); scene.add(sm);
         bullets.push({mesh:sm,vx:Math.sin(ang)*shotSpd2,vz:Math.cos(ang)*shotSpd2,dist:0,pierced:0,dmgMult:shotDmgMult2*0.7,flatBonus:0,maxPierce:p2U.pierceBonus*3,fromP2:true});
       }
+    }
+  }
+  // ── Galaxy Shot spiral (P2) ───────────────────────────────────────────────
+  if(p2U.spiralShot>0){
+    const sDir2=Math.atan2(dx,dz);
+    for(let si=0;si<p2U.spiralShot;si++){
+      const spiralMesh2=new THREE.Mesh(BULLET_GEO,new THREE.MeshBasicMaterial({color:0x44ffcc,transparent:true,opacity:0.95}));
+      const startAng2=sDir2+(si*Math.PI);
+      spiralMesh2.position.set(px2,0.8,pz2); scene.add(spiralMesh2);
+      bullets.push({mesh:spiralMesh2,spiral:true,spiralOrigX:px2,spiralOrigZ:pz2,spiralAngle:startAng2,spiralRadius:0.4,spiralExpandRate:5.0,spiralRotRate:4.0,vx:0,vz:0,dist:0,pierced:0,dmgMult:shotDmgMult2*1.5,flatBonus:0,maxPierce:999,fromP2:true});
     }
   }
   spawnParticles(new THREE.Vector3(px2,0.8,pz2),0x44aaff,4,0.15);
@@ -2237,7 +2419,8 @@ function startGame(){
   reloading2=false; reloadTimer2=0; fireCooldown2=0;
   player2dead=false;
   waveSpawned=false; waveClearing=false;
-  waveTimerActive=false; waveTimeLeft=30; xMarkerTimer=0;
+  spawnQueue=[]; spawnTimer=0; spawnedSoFar=0; spawnTotalForWave=0; mergeIdleTimer=0;
+  waveTimerActive=false; waveTimeLeft=60; xMarkerTimer=0;
   gamePaused=false;
   playerGroup.position.set(-3,GY,0);
   playerGroup2.position.set(3,GY,0);
@@ -2524,6 +2707,56 @@ const _tv2=new THREE.Vector3();
 function update(dt,t){
   if(!gameRunning||gamePaused) return;
 
+  // ── Instant-spawn from X markers (each marker has its own per-marker countdown) ──
+  {
+    let _lc=0; for(let k=0;k<monsters.length;k++) if(!monsters[k].dead) _lc++;
+    for(let xi=xMarkers.length-1;xi>=0;xi--){
+      const xm=xMarkers[xi];
+      if(!(xm.queue&&xm.queue.length>0)) continue;
+      if(xm.spawnDelay===undefined) continue;
+      xm.spawnDelay-=dt;
+      if(xm.spawnDelay<=0){
+        if(_lc<MAX_MONSTERS){
+          const _type=xm.queue.shift();
+          spawnMonster(_type, xm.grp.position.x, xm.grp.position.z);
+          spawnedSoFar++; _lc++;
+          removeXMarker(xm.grp);
+          if(spawnQueue.length>0){
+            relocateXMarker(spawnQueue.shift());
+          }
+        } else {
+          xm.spawnDelay=0.15; // arena full — retry shortly
+        }
+      }
+    }
+  }
+
+  // ── Sustain-spawn: keep new spawn markers appearing throughout the wave ──
+  {
+    let _lc3=0; for(let k=0;k<monsters.length;k++) if(!monsters[k].dead) _lc3++;
+    if(waveTimerActive){
+      spawnTimer-=dt;
+      if(spawnTimer<=0){
+        if(_lc3<MAX_MONSTERS){
+          relocateXMarker(randomMonsterTypeForWave(wave));
+        }
+        spawnTimer = (_lc3<MAX_MONSTERS) ? currentWaveSpawnDelay() : 0.25;
+      }
+    }
+  }
+
+  // ── Pressure-merge: only when all X markers empty AND spawnQueue empty AND arena full for 8s ──
+  {
+    let _lc2=0; for(let k=0;k<monsters.length;k++) if(!monsters[k].dead) _lc2++;
+    const _allEmpty=spawnQueue.length===0 && xMarkers.every(m=>!(m.queue&&m.queue.length>0));
+    if(_allEmpty && _lc2>=MAX_MONSTERS && waveTimerActive){
+      mergeIdleTimer+=dt;
+      if(mergeIdleTimer>=8){mergeIdleTimer=0;mergeMonsters();}
+    } else {
+      mergeIdleTimer=0;
+    }
+  }
+
   // ── Respawn timers ──────────────────────────────────────────
   if(player1dead){
     p1RespawnTimer-=dt;
@@ -2613,18 +2846,70 @@ function update(dt,t){
   // gun timers per player
   if(p1U.chainGunTimer>0)       p1U.chainGunTimer=Math.max(0,p1U.chainGunTimer-dt);
   if(p1U.turboTriggerTimer>0)   p1U.turboTriggerTimer=Math.max(0,p1U.turboTriggerTimer-dt);
+  // Crystal Hoover — permanent auto-collect all crystals
+  if(p1U.crystalVacuumAuto||p2U.crystalVacuumAuto){
+    for(let i=crystalPickups.length-1;i>=0;i--){
+      const c=crystalPickups[i]; if(c.collected) continue;
+      collectCrystal(c, p2U.crystalVacuumAuto&&!p1U.crystalVacuumAuto);
+    }
+  }
+  // Crystal Pulse — collect all crystals every 30s
+  if(p1U.crystalVacuumPulse&&!player1dead){
+    p1U.crystalVacuumCooldown-=dt;
+    if(p1U.crystalVacuumCooldown<=0){
+      p1U.crystalVacuumCooldown=30;
+      showFloaty('💠 Crystal Pulse!',playerGroup.position.clone(),'#44aaff');
+      for(let i=crystalPickups.length-1;i>=0;i--){
+        const c=crystalPickups[i]; if(!c.collected) collectCrystal(c,false);
+      }
+    }
+  }
+  if(p2U.crystalVacuumPulse&&!player2dead){
+    p2U.crystalVacuumCooldown-=dt;
+    if(p2U.crystalVacuumCooldown<=0){
+      p2U.crystalVacuumCooldown=30;
+      showFloaty('💠 Crystal Pulse!',playerGroup2.position.clone(),'#44aaff');
+      for(let i=crystalPickups.length-1;i>=0;i--){
+        const c=crystalPickups[i]; if(!c.collected) collectCrystal(c,true);
+      }
+    }
+  }
   if(p1U.gatlingOn)             p1U.gatlingTimer+=dt;
   if(p2U.chainGunTimer>0)       p2U.chainGunTimer=Math.max(0,p2U.chainGunTimer-dt);
   if(p2U.turboTriggerTimer>0)   p2U.turboTriggerTimer=Math.max(0,p2U.turboTriggerTimer-dt);
   if(p2U.gatlingOn)             p2U.gatlingTimer+=dt;
   if(p1U.regenBonus>0){p1U.regenTimer+=dt;if(p1U.regenTimer>=3){p1U.regenTimer=0;playerHP=Math.min(getMaxHP(),playerHP+2*p1U.regenBonus);updateMainHUD();}}
   if(p2U.regenBonus>0){p2U.regenTimer+=dt;if(p2U.regenTimer>=3){p2U.regenTimer=0;playerHP2=Math.min(getMaxHP(p2U),playerHP2+2*p2U.regenBonus);updateMainHUD();}}
+  // ── Death Aura (new) ─────────────────────────────────────────────────────
+  if(p1U.deathAuraBonus>0&&!player1dead){
+    p1U.deathAuraTimer+=dt;
+    if(p1U.deathAuraTimer>=0.5){
+      p1U.deathAuraTimer=0;
+      monsters.forEach(m=>{
+        if(m.dead)return;
+        const _da=Math.hypot(m.grp.position.x-playerGroup.position.x,m.grp.position.z-playerGroup.position.z);
+        if(_da<4){m.hp-=4*p1U.deathAuraBonus;if(m.hp<=0)killMonster(m,p1U,false);else updateHPBar(m);}
+      });
+    }
+  }
+  if(p2U.deathAuraBonus>0&&!player2dead){
+    p2U.deathAuraTimer+=dt;
+    if(p2U.deathAuraTimer>=0.5){
+      p2U.deathAuraTimer=0;
+      monsters.forEach(m=>{
+        if(m.dead)return;
+        const _da2=Math.hypot(m.grp.position.x-playerGroup2.position.x,m.grp.position.z-playerGroup2.position.z);
+        if(_da2<4){m.hp-=4*p2U.deathAuraBonus;if(m.hp<=0)killMonster(m,p2U,true);else updateHPBar(m);}
+      });
+    }
+  }
 
   // Reload P1
   if(reloading){
     reloadTimer+=dt;
-    document.getElementById('reloadFill').style.width=(reloadTimer/RELOAD_TIME*100)+'%';
-    if(reloadTimer>=RELOAD_TIME){
+    const _rt1=RELOAD_TIME*Math.max(0.3,1-p1U.reloadSpeedBonus*0.2);
+    document.getElementById('reloadFill').style.width=(reloadTimer/_rt1*100)+'%';
+    if(reloadTimer>=_rt1){
       reloading=false;ammo=getAmmoMax();
       document.getElementById('reloadBar').style.display='none';
       updateMainHUD(); showFloaty('Reloaded!',playerGroup.position.clone(),'#ffcc44');
@@ -2633,8 +2918,9 @@ function update(dt,t){
   // Reload P2
   if(reloading2&&!player2dead){
     reloadTimer2+=dt;
-    document.getElementById('reloadFill2').style.width=(reloadTimer2/RELOAD_TIME*100)+'%';
-    if(reloadTimer2>=RELOAD_TIME){
+    const _rt2=RELOAD_TIME*Math.max(0.3,1-p2U.reloadSpeedBonus*0.2);
+    document.getElementById('reloadFill2').style.width=(reloadTimer2/_rt2*100)+'%';
+    if(reloadTimer2>=_rt2){
       reloading2=false; ammo2=getAmmoMax(p2U);
       document.getElementById('reloadBar2').style.display='none';
       updateMainHUD(); showFloaty('P2 Reloaded!',playerGroup2.position.clone(),'#44ccff');
@@ -2647,19 +2933,58 @@ function update(dt,t){
     waveTimeLeft-=dt;
     const _sec=Math.max(0,Math.ceil(waveTimeLeft));
     if(_sec!==_lastTimerSec){_lastTimerSec=_sec;const _th=document.getElementById('timerHUD');_th.textContent='\u23F1 '+_sec+'s';_th.classList.toggle('urgent',_sec<=10);}
-    xMarkerTimer+=dt;
-    const xInterval=10;
-    const xCount=twoPlayerMode?40:20;
-    if(xMarkerTimer>=xInterval){xMarkerTimer=0;spawnXMarkers(xCount);}
     updateXMarkers(dt);
+
+    // Sustain-spawn: keep generating monsters for the entire wave.
+    spawnTimer-=dt;
+    let _sustainAdds=0;
+    while(spawnTimer<=0){
+      spawnTimer+=currentWaveSpawnDelay();
+      if(spawnQueue.length<260){
+        spawnQueue.push(randomMonsterTypeForWave(wave));
+        spawnTotalForWave++;
+      }
+      _sustainAdds++;
+      if(_sustainAdds>=5) break;
+    }
+    // If all warning markers were consumed, re-seed markers from the fresh queue.
+    const _targetMarkers=Math.min(6+Math.floor(wave/2),14);
+    while(spawnQueue.length>0 && xMarkers.length<_targetMarkers){
+      relocateXMarker(spawnQueue.shift());
+    }
+
+    // Refresh the decorative red X pool (cap = DECOR_X_CAP) every 3 seconds
+    decorXTimer+=dt;
+    if(decorXTimer>=3){
+      decorXTimer=0;
+      // Remove all current decorative Xs first
+      for(let _di=decorXPool.length-1;_di>=0;_di--){
+        removeXMarker(decorXPool[_di]);decorXPool.splice(_di,1);
+      }
+      // Spawn exactly DECOR_X_CAP fresh decorative Xs (no point light = no lag)
+      for(let _di=0;_di<DECOR_X_CAP;_di++){
+        const _da=Math.random()*Math.PI*2;
+        const _dr=3+Math.random()*(ARENA_R-5);
+        const _g=createXMarker3D(Math.cos(_da)*_dr, Math.sin(_da)*_dr, true);
+        decorXPool.push(_g);
+      }
+    }
     if(waveTimeLeft<=0){advanceToNextWave();return;}
   }
 
   // Bullets
   for(let i=bullets.length-1;i>=0;i--){
     const b=bullets[i];
-    b.mesh.position.x+=b.vx*dt; b.mesh.position.z+=b.vz*dt;
-    b.dist+=Math.hypot(b.vx,b.vz)*dt;
+    if(b.spiral){
+      b.spiralAngle+=b.spiralRotRate*dt;
+      b.spiralRadius+=b.spiralExpandRate*dt;
+      b.mesh.position.x=b.spiralOrigX+Math.cos(b.spiralAngle)*b.spiralRadius;
+      b.mesh.position.z=b.spiralOrigZ+Math.sin(b.spiralAngle)*b.spiralRadius;
+      b.dist=b.spiralRadius;
+    } else {
+      b.mesh.position.x+=b.vx*dt; b.mesh.position.z+=b.vz*dt;
+      b.dist+=Math.hypot(b.vx,b.vz)*dt;
+    }
     let remove=false;
     for(let j=0;j<monsters.length;j++){
       const m=monsters[j]; if(m.dead) continue;
@@ -2703,7 +3028,7 @@ function update(dt,t){
         break;
       }
     }
-    if(remove||b.dist>BULLET_RANGE){scene.remove(b.mesh);_disposeBulletMesh(b.mesh);bullets.splice(i,1);}
+    if(remove||(b.spiral?b.spiralRadius>ARENA_R-1:b.dist>BULLET_RANGE)){scene.remove(b.mesh);_disposeBulletMesh(b.mesh);bullets.splice(i,1);}
   }
 
   // Crystal pickups — either player can collect
@@ -2816,7 +3141,10 @@ function update(dt,t){
             showFloaty('-'+Math.round(taken),playerGroup.position.clone(),'#ff4444');
             spawnParticles(playerGroup.position.clone(),0xff0000,3,0.35);
             if(playerHP<=0){
-              playerHP=0; player1dead=true;
+              if(p1U.phoenixCharge>0){
+                p1U.phoenixCharge--;playerHP=30;updateMainHUD();
+                showFloaty('🔥 PHOENIX! +30HP',playerGroup.position.clone(),'#ff8800');
+              } else {  playerHP=0; player1dead=true;
               spawnCrystalPickup(playerGroup.position.clone(),DEATH_CRYSTAL_DROP);
               playerGroup.visible=false; pShadow.visible=false;
               p1RespawnTimer=twoPlayerMode?999999:RESPAWN_TIME;
@@ -2828,6 +3156,7 @@ function update(dt,t){
                 showHome('\u{1F480} Game Over \u2014 Wave '+wave+' \u2022 \uD83E\uDE99 '+coins+' earned');
                 return;
               }
+              } // end else phoenix
             }
             } // end else !p1Invincible
           }
@@ -2847,7 +3176,10 @@ function update(dt,t){
             showFloaty('-'+Math.round(taken),playerGroup2.position.clone(),'#ff6666');
             spawnParticles(playerGroup2.position.clone(),0xff0000,3,0.35);
             if(playerHP2<=0){
-              playerHP2=0; player2dead=true;
+              if(p2U.phoenixCharge>0){
+                p2U.phoenixCharge--;playerHP2=30;updateMainHUD();
+                showFloaty('🔥 PHOENIX! +30HP',playerGroup2.position.clone(),'#ff8800');
+              } else {  playerHP2=0; player2dead=true;
               spawnCrystalPickup(playerGroup2.position.clone(),DEATH_CRYSTAL_DROP);
               playerGroup2.visible=false; pShadow2.visible=false;
               p2RespawnTimer=twoPlayerMode?999999:RESPAWN_TIME;
@@ -2859,6 +3191,7 @@ function update(dt,t){
                 showHome('\u{1F480} Game Over \u2014 Wave '+wave+' \u2022 \uD83E\uDE99 '+coins+' earned');
                 return;
               }
+              } // end else phoenix
             }
             } // end else !p2Invincible
           }

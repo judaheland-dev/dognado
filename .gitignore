@@ -1,0 +1,18 @@
+.DS_Store
+*.zip
+node_modules/
+*.py
+*.swift
+*.m
+*.command
+package.json
+server.js
+slither-server.js
+tracking-app
+tracking-app.*
+tracking-server.py
+tracking-system.html
+wob-jump.html
+slither-tracker/
+tracking-system/
+monster-attack copy.html
